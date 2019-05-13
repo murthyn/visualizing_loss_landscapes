@@ -9,9 +9,9 @@ Original file is located at
 
 # Installing PyTorch, import libraries
 
-!pip3 install torch torchvision
-!pip3 install h5py
-!pip3 install progressbar2
+#!pip3 install torch torchvision
+#!pip3 install h5py
+#!pip3 install progressbar2
 
 import torch, torchvision
 from torchvision import transforms
@@ -191,7 +191,7 @@ for count, ind in progressbar.progressbar(enumerate(inds), max_value=len(inds)):
   elif args.dir_type == 'states':
     set_states(model, state, directions, coord)
   
-  value = eval_layer_vals(model, 6, trainloader)
+  value = eval_layer_vals(model, 4, trainloader)
   values.ravel()[ind] = value
   
   # update surf_file
