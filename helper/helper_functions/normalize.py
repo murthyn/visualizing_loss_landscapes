@@ -62,6 +62,7 @@ def normalize_directions_for_weights(direction, weights, norm='filter', ignore='
             normalize_direction(d, w, norm)
 
 def normalize_directions_for_states(direction, states, norm='filter', ignore='ignore'):
+    print("Directions:", len(direction), "States:", len(states))
     assert(len(direction) == len(states))
     for d, (k, w) in zip(direction, states.items()):
         if d.dim() <= 1:

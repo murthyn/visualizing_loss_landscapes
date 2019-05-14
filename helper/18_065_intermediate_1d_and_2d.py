@@ -13,11 +13,14 @@ Original file is located at
 #!pip3 install h5py
 #!pip3 install progressbar2
 
-import torch, torchvision
+import torch
+import torchvision
 from torchvision import transforms
 from torch.autograd.variable import Variable
+from argparse import ArgumentParser
 
-import os, copy
+import os
+import copy
 from os.path import exists, commonprefix
 import time
 import progressbar
@@ -31,174 +34,224 @@ from matplotlib import cm
 import seaborn as sns
 
 # helper functions
-from helper_weights_states import get_weights, set_weights, set_states, get_random_weights, get_random_states, get_diff_weights, get_diff_states
-from helper_normalize import normalize_direction, normalize_directions_for_weights, normalize_directions_for_states, ignore_biasbn
-from helper_directions import create_target_direction, create_random_direction, setup_direction, name_direction_file, load_directions
-from helper_h5_util import write_list, read_list
-from helper_surface import name_surface_file, setup_surface_file
-from helper_dataset import get_relative_path, load_dataset
-from helper_plot import plot_1d_loss_err, plot_2d_contour
+from helper_functions.weights_states import get_weights, set_weights, set_states, get_random_weights, get_random_states, get_diff_weights, get_diff_states
+from helper_functions.normalize import normalize_direction, normalize_directions_for_weights, normalize_directions_for_states, ignore_biasbn
+from helper_functions.directions import create_target_direction, create_random_direction, setup_direction, name_direction_file, load_directions
+from helper_functions.h5_util import write_list, read_list
+from helper_functions.surface import name_surface_file, setup_surface_file
+from helper_functions.dataset import get_relative_path, load_dataset
+from helper_functions.plot import plot_1d_loss_err, plot_2d_contour
 
 # PyTorch settings
-use_cuda = True
-
-# Pretrained ResNet 50
-model = torchvision.models.resnet50(pretrained=True)
-if use_cuda: model = model.cuda()
-
-# Saving model to file
-torch.save(model, "resnet50")
-
-# model weights and state_dicts (copy)
-weights = get_weights(model)
-state = copy.deepcopy(model.state_dict())
-
-# set up args
-class Args:
-  def __init__(self, batch_size = 128, x="-1:1:51", y = None, 
-              dir_file = '', dir_type='weights', xnorm = '',
-              ynorm = '', xignore = '', yignore = '', 
-               same_dir = 'store_true', idx = 0, 
-               model_file="resnet50", model_file2 = "", model_file3 = "",
-              surf_file = '', raw_data = False, data_split = 1,
-              dataset='cifar10', datapath='cifar10/data', 
-              split_idx=0, trainloader='', testloader='', threads=2,
-              value_max = 0.1):
-    
-    self.batch_size = batch_size
-    self.threads = threads
-    
-    self.x = x
-    self.y = y
-    self.dir_file = dir_file
-    self.dir_type = dir_type
-    self.xnorm = xnorm
-    self.ynorm = ynorm
-    self.xignore = xignore
-    self.yignore = yignore
-    self.same_dir = same_dir
-    self.idx = idx
-    
-    self.model_file = model_file
-    self.model_file2 = model_file2
-    self.model_file3 = model_file3
-    self.surf_file = surf_file
-    
-    self.raw_data = raw_data
-    self.data_split = data_split
-    self.dataset = dataset
-    self.datapath = datapath
-    self.split_idx = split_idx
-    self.trainloader = trainloader
-    self.testloader = testloader
-    
-    self.value_max = value_max
-    
-    self.xmin = None
-    self.xmax = None
-    self.ymin = None
-    self.ymax = None
-    self.xnum = None
-    self.ynum = None
-    
-#args = Args(batch_size = 128, dir_type = "states") #1D
-args = Args(batch_size = 128, x = "-1:1:21", y = "-1:1:21", dir_type = "states", same_dir = False) #2D
-
-# Plotting resolution
-
-try:
-    args.xmin, args.xmax, args.xnum = [float(a) for a in args.x.split(':')]
-    args.ymin, args.ymax, args.ynum = (None, None, None)
-    if args.y:
-        args.ymin, args.ymax, args.ynum = [float(a) for a in args.y.split(':')]
-        assert args.ymin and args.ymax and args.ynum, \
-        'You specified some arguments for the y axis, but not all'
-except:
-    raise Exception('Improper format for x- or y-coordinates. Try something like -1:1:51')
-
-# direction file/surface file
-dir_file = name_direction_file(args)
-setup_direction(args, dir_file, model)
-
-surf_file = name_surface_file(args, dir_file)
-setup_surface_file(args, surf_file, dir_file)
-
-# directions
-directions = load_directions(dir_file)
-
-# Crunch
-
-f = h5py.File(surf_file, 'r')
-xcoordinates = f['xcoordinates'][:]
-ycoordinates = f['ycoordinates'][:] if 'ycoordinates' in f.keys() else None
-
-plotting_dims = 2 if ycoordinates is not None else 1
-
-f.close()
-
-shape = xcoordinates.shape if ycoordinates is None else (len(xcoordinates),len(ycoordinates))
-values = -np.ones(shape=shape)
-
-inds = np.array(range(values.size))
-
-#2D
-if plotting_dims == 2:
-  xcoord_mesh, ycoord_mesh = np.meshgrid(xcoordinates, ycoordinates)
-  s1 = xcoord_mesh.ravel()[inds]
-  s2 = ycoord_mesh.ravel()[inds]
-  coords = np.c_[s1, s2]
-#1D
+if torch.cuda.is_available():
+    device = "cuda"
 else:
-  coords = xcoordinates.ravel()[inds]
+    device = "cpu"
+
+
+def parse_args():
+    parser = ArgumentParser(description='plotting loss surface')
+    parser.add_argument('--mpi', '-m', action='store_true', help='use mpi')
+    parser.add_argument('--cuda', '-c', action='store_true', help='use cuda')
+    parser.add_argument('--threads', default=2, type=int,
+                        help='number of threads')
+    parser.add_argument('--ngpu', type=int, default=1,
+                        help='number of GPUs to use for each rank, useful for data parallel evaluation')
+    parser.add_argument('--batch_size', default=1024,
+                        type=int, help='minibatch size')
+
+    # data parameters
+    parser.add_argument('--dataset', default='cifar10',
+                        help='cifar10 | imagenet')
+    parser.add_argument('--datapath', default='cifar10/data',
+                        metavar='DIR', help='path to the dataset')
+    parser.add_argument('--raw_data', action='store_true',
+                        default=False, help='no data preprocessing')
+    parser.add_argument('--data_split', default=1, type=int,
+                        help='the number of splits for the dataloader')
+    parser.add_argument('--split_idx', default=0, type=int,
+                        help='the index of data splits for the dataloader')
+    parser.add_argument('--trainloader', default='',
+                        help='path to the dataloader with random labels')
+    parser.add_argument('--testloader', default='',
+                        help='path to the testloader with random labels')
+
+    # model parameters
+    parser.add_argument('--model', default='resnet56', help='model name')
+    parser.add_argument('--model_folder', default='',
+                        help='the common folder that contains model_file and model_file2')
+    parser.add_argument('--model_file', default='',
+                        help='path to the trained model file')
+    parser.add_argument('--model_file2', default='',
+                        help='use (model_file2 - model_file) as the xdirection')
+    parser.add_argument('--model_file3', default='',
+                        help='use (model_file3 - model_file) as the ydirection')
+    parser.add_argument('--loss_name', '-l', default='crossentropy',
+                        help='loss functions: crossentropy | mse')
+
+    # direction parameters
+    parser.add_argument('--dir_file', default='',
+                        help='specify the name of direction file, or the path to an eisting direction file')
+    parser.add_argument('--dir_type', default='states',
+                        help='direction type: weights | states (including BN\'s running_mean/var)')
+    parser.add_argument('--x', default='-1:1:51',
+                        help='A string with format xmin:x_max:xnum')
+    parser.add_argument('--y', default=None,
+                        help='A string with format ymin:ymax:ynum')
+    parser.add_argument('--xnorm', default='',
+                        help='direction normalization: filter | layer | weight')
+    parser.add_argument('--ynorm', default='',
+                        help='direction normalization: filter | layer | weight')
+    parser.add_argument('--xignore', default='',
+                        help='ignore bias and BN parameters: biasbn')
+    parser.add_argument('--yignore', default='',
+                        help='ignore bias and BN parameters: biasbn')
+    parser.add_argument('--same_dir', action='store_true', default=False,
+                        help='use the same random direction for both x-axis and y-axis')
+    parser.add_argument('--idx', default=0, type=int,
+                        help='the index for the repeatness experiment')
+    parser.add_argument('--surf_file', default='',
+                        help='customize the name of surface file, could be an existing file.')
+
+    # plot parameters
+    parser.add_argument('--proj_file', default='',
+                        help='the .h5 file contains projected optimization trajectory.')
+    parser.add_argument('--value_max', default=0.0005,
+                        type=float, help='Maximum value to show in 1D plot')
+    parser.add_argument('--vmax', default=10, type=float,
+                        help='Maximum value to map')
+    parser.add_argument('--vmin', default=0.1, type=float,
+                        help='Miminum value to map')
+    parser.add_argument('--vlevel', default=0.5, type=float,
+                        help='plot contours every vlevel')
+    parser.add_argument('--show', action='store_true',
+                        default=False, help='show plotted figures')
+    parser.add_argument('--log', action='store_true',
+                        default=False, help='use log scale for loss values')
+    parser.add_argument('--plot', action='store_true',
+                        default=False, help='plot figures after computation')
+
+    return parser.parse_args()
+
 
 def eval_layer_vals(model, children_num, loader):
-  model_part = torch.nn.Sequential(*list(model.children())[:children_num])
-  
-  total_val = 0
-  total = 0
-  num_batch = len(loader)
-  
-  with torch.no_grad():
-    for batch_idx, (inputs, _) in enumerate(loader):
-          batch_size = inputs.size(0)
-          total += batch_size
-          inputs = Variable(inputs)
-          inputs = inputs.cuda()
+    model_part = torch.nn.Sequential(*list(model.children())[:children_num])
 
-          outputs = model_part(inputs)
+    total_val = 0
+    total = 0
+    num_batch = len(loader)
 
-          total_val += torch.sum(outputs[:][0][0][0])
+    with torch.no_grad():
+        for batch_idx, (inputs, _) in enumerate(loader):
+            batch_size = inputs.size(0)
+            total += batch_size
+            inputs = Variable(inputs)
+            inputs = inputs.cuda()
 
-  return total_val/total
+            outputs = model_part(inputs)
 
-# download CIFAR10 if it does not exit
-torchvision.datasets.CIFAR10(root=args.dataset + '/data', train=True, download=True)
+            total_val += torch.sum(outputs[:][0][0][0])
 
-trainloader, testloader = load_dataset(args.dataset, args.datapath,
-                            args.batch_size, args.threads, args.raw_data,
-                            args.data_split, args.split_idx,
-                            args.trainloader, args.testloader)
+    return total_val/total
 
-f = h5py.File(surf_file, 'r+')
 
-if 'train_value' not in f.keys():
-  f['train_value'] = values
+def run(args):
+        # Pretrained ResNet 50
+    model = torchvision.models.resnet50(pretrained=True)
+    model = model.to(device)
 
-for count, ind in progressbar.progressbar(enumerate(inds), max_value=len(inds)):
-  coord = coords[count]
-  if args.dir_type == 'weights':
-      set_weights(model, weights, directions, coord)
-  elif args.dir_type == 'states':
-    set_states(model, state, directions, coord)
-  
-  value = eval_layer_vals(model, 4, trainloader)
-  values.ravel()[ind] = value
-  
-  # update surf_file
-  f['train_value'][:] = values
-  
-f.close()
+    # Saving model to file
+    torch.save(model, "resnet50")
 
-#plot_1d_loss_err(surf_file, args.xmin, args.xmax, 0.01, False, True) #1D
-plot_2d_contour(surf_file, surf_name='train_value', vmin=0.001, vmax=0.01, vlevel=0.003, show=True) #2D
+    # model weights and state_dicts (copy)
+    weights = get_weights(model)
+    state = copy.deepcopy(model.state_dict())
 
+    # direction file/surface file
+    dir_file = name_direction_file(args)
+    setup_direction(args, dir_file, model)
+
+    surf_file = name_surface_file(args, dir_file)
+    setup_surface_file(args, surf_file, dir_file)
+
+    # directions
+    directions = load_directions(dir_file)
+
+    # Crunch
+
+    f = h5py.File(surf_file, 'r')
+    xcoordinates = f['xcoordinates'][:]
+    ycoordinates = f['ycoordinates'][:] if 'ycoordinates' in f.keys() else None
+
+    plotting_dims = 2 if ycoordinates is not None else 1
+
+    f.close()
+
+    shape = xcoordinates.shape if ycoordinates is None else (
+        len(xcoordinates), len(ycoordinates))
+    values = -np.ones(shape=shape)
+
+    inds = np.array(range(values.size))
+
+    # 2D
+    if plotting_dims == 2:
+        xcoord_mesh, ycoord_mesh = np.meshgrid(xcoordinates, ycoordinates)
+        s1 = xcoord_mesh.ravel()[inds]
+        s2 = ycoord_mesh.ravel()[inds]
+        coords = np.c_[s1, s2]
+    # 1D
+    else:
+        coords = xcoordinates.ravel()[inds]
+
+    # download CIFAR10 if it does not exit
+    torchvision.datasets.CIFAR10(
+        root=args.dataset + '/data', train=True, download=True)
+
+    trainloader, testloader = load_dataset(args.dataset, args.datapath,
+                                           args.batch_size, args.threads, args.raw_data,
+                                           args.data_split, args.split_idx,
+                                           args.trainloader, args.testloader)
+
+    f = h5py.File(surf_file, 'r+')
+
+    if 'train_value' not in f.keys():
+        f['train_value'] = values
+
+    for count, ind in progressbar.progressbar(enumerate(inds), max_value=len(inds)):
+        coord = coords[count]
+        if args.dir_type == 'weights':
+            set_weights(model, weights, directions, coord)
+        elif args.dir_type == 'states':
+            set_states(model, state, directions, coord)
+
+        value = eval_layer_vals(model, 4, trainloader)
+        values.ravel()[ind] = value
+
+        # update surf_file
+        f['train_value'][:] = values
+
+    f.close()
+
+    # plot_1d_loss_err(surf_file, args.xmin, args.xmax, 0.01, False, True) #1D
+    plot_2d_contour(surf_file, surf_name='train_value',
+                    vmin=0.001, vmax=0.01, vlevel=0.003, show=True)  # 2D
+
+
+if __name__ == "__main__":
+    # args = Args(batch_size = 128, dir_type = "states") #1D
+    args = parse_args()
+
+    # Plotting resolution
+    try:
+        args.xmin, args.xmax, args.xnum = [float(a) for a in args.x.split(':')]
+        args.ymin, args.ymax, args.ynum = (None, None, None)
+        if args.y:
+            args.ymin, args.ymax, args.ynum = [
+                float(a) for a in args.y.split(':')]
+            assert args.ymin and args.ymax and args.ynum, \
+                'You specified some arguments for the y axis, but not all'
+    except:
+        raise Exception(
+            'Improper format for x- or y-coordinates. Try something like -1:1:51')
+
+    run(args)

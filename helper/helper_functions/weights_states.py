@@ -65,21 +65,47 @@ def set_states(net, states, directions=None, step=None):
         net.load_state_dict(new_states)
         
 
-def get_random_weights(weights):
+def get_random_weights(weights, neuron=None):
     """
         Produce a random direction that is a list of random Gaussian tensors
         with the same shape as the network's weights, so one direction entry per weight.
+
+        args: weights, a list of weights for the model
+        neuron: a list of [layer number, neuron number] to perturb the weights for.
     """
-    return [torch.randn(w.size()) for w in weights]
+    if neuron:
+        assert type(neuron)==list
+        layer_no, neuron_no = neuron
+        directions = [torch.zeros(w.size()) for w in weights[:layer_no]]
+        random_vector = torch.zeros(weights[layer_no].size())
+        random_vector[:,neuron_no] += torch.randn((1,random_vector.shape[1]))
+        directions += [torch.zeros(w.size()) for w in weights[layer_no+1:]]
+        return directions
+    else:
+        return [torch.randn(w.size()) for w in weights]
   
 
-def get_random_states(states):
+def get_random_states(states, neuron=None):
     """
         Produce a random direction that is a list of random Gaussian tensors
         with the same shape as the network's state_dict(), so one direction entry
         per weight, including BN's running_mean/var.
     """
-    return [torch.randn(w.size()) for k, w in states.items()]
+    if neuron:
+        assert type(neuron)==list
+        layer_no, neuron_no = neuron
+        directions = [torch.zeros(w.size()) for w in list(states.values())[:layer_no]]
+        random_matrix = torch.zeros(list(states.values())[layer_no].size())
+        print("Random matrix shape:", random_matrix.shape)
+        random_vector = torch.randn(random_matrix.shape[1:])
+        print("Random matrix shape:", random_vector.shape)
+        print("Matrix selection shape:", random_matrix[:,neuron_no].shape)
+        random_matrix[:,neuron_no] += random_vector 
+        directions += [random_matrix]
+        directions += [torch.zeros(w.size()) for w in list(states.values())[layer_no+1:]]
+        return directions
+    else:
+        return [torch.randn(w.size()) for k, w in states.items()]
   
 
 def get_diff_weights(weights, weights2):

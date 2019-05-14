@@ -15,9 +15,9 @@ from mpl_toolkits.mplot3d import Axes3D
 from matplotlib import cm
 import seaborn as sns
 
-from helper_weights_states import get_weights, set_weights, set_states, get_random_weights, get_random_states, get_diff_weights, get_diff_states
-from helper_normalize import normalize_direction, normalize_directions_for_weights, normalize_directions_for_states, ignore_biasbn
-from helper_h5_util import write_list, read_list
+from .weights_states import get_weights, set_weights, set_states, get_random_weights, get_random_states, get_diff_weights, get_diff_states
+from .normalize import normalize_direction, normalize_directions_for_weights, normalize_directions_for_states, ignore_biasbn
+from .h5_util import write_list, read_list
 
 def create_target_direction(net, net2, dir_type='states'):
     """
@@ -44,7 +44,7 @@ def create_target_direction(net, net2, dir_type='states'):
 
     return direction
   
-def create_random_direction(net, dir_type='weights', ignore='biasbn', norm='filter'):
+def create_random_direction(net, dir_type='weights', ignore='biasbn', norm='filter', neuron=None):
     """
         Setup a random (normalized) direction with the same dimension as
         the weights or states.
@@ -61,16 +61,16 @@ def create_random_direction(net, dir_type='weights', ignore='biasbn', norm='filt
     # random direction
     if dir_type == 'weights':
         weights = get_weights(net) # a list of parameters.
-        direction = get_random_weights(weights)
+        direction = get_random_weights(weights, neuron=neuron)
         normalize_directions_for_weights(direction, weights, norm, ignore)
     elif dir_type == 'states':
         states = net.state_dict() # a dict of parameters, including BN's running mean/var.
-        direction = get_random_states(states)
+        direction = get_random_states(states, neuron=neuron)
         normalize_directions_for_states(direction, states, norm, ignore)
 
     return direction
   
-def setup_direction(args, dir_file, net):
+def setup_direction(args, dir_file, net, neuron=None):
     """
         Setup the h5 file to store the directions.
         - xdirection, ydirection: The pertubation direction added to the mdoel.
@@ -96,7 +96,7 @@ def setup_direction(args, dir_file, net):
             net2 = model_loader.load(args.dataset, args.model, args.model_file2)
             xdirection = create_target_direction(net, net2, args.dir_type)
         else:
-            xdirection = create_random_direction(net, args.dir_type, args.xignore, args.xnorm)
+            xdirection = create_random_direction(net, args.dir_type, args.xignore, args.xnorm, neuron=neuron)
         write_list(f, 'xdirection', xdirection)
 
         if args.y:
@@ -106,14 +106,19 @@ def setup_direction(args, dir_file, net):
                 net3 = model_loader.load(args.dataset, args.model, args.model_file3)
                 ydirection = create_target_direction(net, net3, args.dir_type)
             else:
-                ydirection = create_random_direction(net, args.dir_type, args.yignore, args.ynorm)
+                ydirection = create_random_direction(net, args.dir_type, args.yignore, args.ynorm, neuron=neuron)
             write_list(f, 'ydirection', ydirection)
 
     f.close()
     print ("direction file created: %s" % dir_file)
     
 def name_direction_file(args):
-    """ Name the direction file that stores the random directions. """
+    """ 
+    Name the direction file that stores the random directions.
+    
+    Input: args, the set of arguments from argparse
+    Output: a string, typically {model_file}_{direction_type} 
+    """
 
     if args.dir_file:
         assert exists(args.dir_file), "%s does not exist!" % args.dir_file
