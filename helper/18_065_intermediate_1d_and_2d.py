@@ -32,6 +32,7 @@ from matplotlib import pyplot as pp
 from mpl_toolkits.mplot3d import Axes3D
 from matplotlib import cm
 import seaborn as sns
+from models import resnet
 
 # helper functions
 from helper_functions.weights_states import get_weights, set_weights, set_states, get_random_weights, get_random_states, get_diff_weights, get_diff_states
@@ -88,6 +89,9 @@ def parse_args():
                         help='use (model_file3 - model_file) as the ydirection')
     parser.add_argument('--loss_name', '-l', default='crossentropy',
                         help='loss functions: crossentropy | mse')
+    parser.add_argument('--load', default='', type=str, metavar='PATH',
+                        help='path to latest checkpoint (default: none)')
+
 
     # direction parameters
     parser.add_argument('--dir_file', default='',
@@ -149,17 +153,40 @@ def eval_layer_vals(model, children_num, loader):
             inputs = inputs.cuda()
 
             outputs = model_part(inputs)
-
-            total_val += torch.sum(outputs[:][0][0][0])
+            # print("Output shape:", outputs.shape)
+            total_val += torch.sum(outputs[:][0][0])
 
     return total_val/total
 
 
 def run(args):
-        # Pretrained ResNet 50
-    model = torchvision.models.resnet50(pretrained=True)
-    model = model.to(device)
+    # Pretrained ResNet 50
+    if args.model=="resnet50":
+        model = torchvision.models.resnet50(pretrained=True)
+        model = model.to(device)
+    elif args.model=="resnet50_no_bn":
+        model = resnet.resnet50(pretrained=False, norm=False) 
+    elif args.model=="resnet50_no_skip":
+        model = resnet.resnet50(pretrained=False, residual_connections=False)
 
+    model = torch.nn.DataParallel(model).to(device)
+    
+    if args.load:
+        if os.path.isfile(args.load):
+            print("=> loading checkpoint '{}'".format(args.load))
+            checkpoint = torch.load(args.load)
+            args.start_epoch = checkpoint['epoch']
+            best_acc1 = checkpoint['best_acc1']
+            # best_acc1 may be from a checkpoint from a different GPU
+            best_acc1 = best_acc1.to(device)
+            model.load_state_dict(checkpoint['state_dict'])
+            # optimizer.load_state_dict(checkpoint['optimizer'])
+            print("=> loaded checkpoint '{}' (epoch {})"
+                  .format(args.load, checkpoint['epoch']))
+        else:
+            print("=> no checkpoint found at '{}'".format(args.load))
+
+    
     # Saving model to file
     torch.save(model, "resnet50")
 
