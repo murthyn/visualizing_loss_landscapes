@@ -134,11 +134,15 @@ def parse_args():
                         default=False, help='use log scale for loss values')
     parser.add_argument('--plot', action='store_true',
                         default=False, help='plot figures after computation')
+    parser.add_argument('--child-num', type=int, 
+                        default=6, help='children number of model to use')
+    parser.add_argument('--neuron-num', type=int, 
+                        default=0, help='unit number of model to use')
 
     return parser.parse_args()
 
 
-def eval_layer_vals(model_part, loader):
+def eval_layer_vals(model_part, loader, neuron_num):
 
     total_val = 0
     total = 0
@@ -153,7 +157,7 @@ def eval_layer_vals(model_part, loader):
 
             outputs = model_part(inputs)
             # print("Output shape:", outputs.shape)
-            total_val += torch.sum(outputs[:][0][0])
+            total_val += torch.sum(outputs[:][0][neuron_num])
 
     return total_val/total
 
@@ -202,6 +206,8 @@ def run(args):
     setup_direction(args, dir_file, model)
 
     surf_file = name_surface_file(args, dir_file)
+    surf_file = os.path.join(f"visualizations/layer_{args.child_num}/{args.model}/", surf_file)
+    os.makedirs(os.path.dirname(surf_file), exist_ok=True)
     setup_surface_file(args, surf_file, dir_file)
 
     # directions
@@ -247,8 +253,7 @@ def run(args):
     if 'train_value' not in f.keys():
         f['train_value'] = values
 
-    child_num = 6
-    model_part = torch.nn.Sequential(*list(model.children())[:child_num]).to(device)
+    model_part = torch.nn.Sequential(*list(model.children())[:args.child_num]).to(device)
     for count, ind in progressbar.progressbar(enumerate(inds), max_value=len(inds)):
         coord = coords[count]
         if args.dir_type == 'weights':
@@ -256,7 +261,7 @@ def run(args):
         elif args.dir_type == 'states':
             set_states(model, state, directions, coord)
 
-        value = eval_layer_vals(model_part, testloader)
+        value = eval_layer_vals(model_part, testloader, args.neuron_num)
         values.ravel()[ind] = value
 
         # update surf_file
@@ -267,6 +272,9 @@ def run(args):
     # plot_1d_loss_err(surf_file, args.xmin, args.xmax, 0.01, False, True) #1D
     plot_2d_contour(surf_file, surf_name='train_value',
                     vmin=0.001, vmax=0.01, vlevel=0.003, show=True)  # 2D
+
+    print("Deleting _states.h5")
+    os.remove(surf_file)
 
 
 if __name__ == "__main__":
