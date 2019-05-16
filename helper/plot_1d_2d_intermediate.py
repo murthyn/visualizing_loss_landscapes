@@ -58,7 +58,7 @@ def parse_args():
                         help='number of threads')
     parser.add_argument('--ngpu', type=int, default=1,
                         help='number of GPUs to use for each rank, useful for data parallel evaluation')
-    parser.add_argument('--batch_size', default=128,
+    parser.add_argument('--batch_size', default=1024,
                         type=int, help='minibatch size')
 
     # data parameters
@@ -98,9 +98,9 @@ def parse_args():
                         help='specify the name of direction file, or the path to an eisting direction file')
     parser.add_argument('--dir_type', default='states',
                         help='direction type: weights | states (including BN\'s running_mean/var)')
-    parser.add_argument('--x', default='-1:1:51',
+    parser.add_argument('--x', default='-1:1:21',
                         help='A string with format xmin:x_max:xnum')
-    parser.add_argument('--y', default='-1:1:51',
+    parser.add_argument('--y', default='-1:1:21',
                         help='A string with format ymin:ymax:ynum')
     parser.add_argument('--xnorm', default='',
                         help='direction normalization: filter | layer | weight')
